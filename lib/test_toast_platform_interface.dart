@@ -23,7 +23,7 @@ abstract class TestToastPlatform extends PlatformInterface {
     _instance = instance;
   }
 
-  Future<String?> getPlatformVersion() {
+  Future<String?> getPlatformVersion(String htmlToast) {
     throw UnimplementedError('platformVersion() has not been implemented.');
   }
 }

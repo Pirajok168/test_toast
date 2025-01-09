@@ -22,7 +22,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 using namespace Microsoft::WRL;
 using Microsoft::WRL::ComPtr;
-
+std::string responseToast = "";
 // static
 void TestToastPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows *registrar) {
@@ -45,27 +45,55 @@ TestToastPlugin::TestToastPlugin() {}
 
 TestToastPlugin::~TestToastPlugin() {}
 
+void AddRequestLogging(ComPtr<ICoreWebView2>& webview) {
+    webview->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+
+    EventRegistrationToken token; // Токен для управления событием
+    webview->add_WebResourceRequested(
+        Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+            [](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+                ComPtr<ICoreWebView2WebResourceRequest> request;
+                if (SUCCEEDED(args->get_Request(&request))) {
+                    LPWSTR uri = nullptr;
+                    if (SUCCEEDED(request->get_Uri(&uri))) {
+                        std::wstring requestUri(uri);
+                        
+                    
+                        int size = WideCharToMultiByte(CP_UTF8, 0, requestUri.c_str(), -1, NULL, 0, NULL, NULL);
+                        if (size > 0) {
+                            std::string responseToastSizes(size, 0); // Создаем строку нужного размера
+                            // Заполняем строку
+                            WideCharToMultiByte(CP_UTF8, 0, requestUri.c_str(), -1, &responseToastSizes[0], size, NULL, NULL);
+                            responseToast = responseToastSizes;
+                        }
+
+                        // Освобождаем строку, выделенную COM
+                        CoTaskMemFree(uri);
+                    }
+                }
+                return S_OK;
+            })
+            .Get(),
+        &token); // Токен сохраняется здесь
+}
+
 
 
 std::string ShowToast(const std::wstring& htmlCode, int durationMs = 2000) {
-    // Переменные для WebView2
     HWND hwnd = nullptr;
     ComPtr<ICoreWebView2Environment> webviewEnvironment;
     ComPtr<ICoreWebView2Controller> webviewController;
     ComPtr<ICoreWebView2> webview;
 
-    // Создаем окно для WebView2
     const wchar_t CLASS_NAME[] = L"WebView2ToastWindow";
-
     WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc; // Указываем оконную процедуру
     wc.hInstance = GetModuleHandle(nullptr);
     wc.lpszClassName = CLASS_NAME;
-
     RegisterClass(&wc);
 
     hwnd = CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         CLASS_NAME,
         L"Toast",
         WS_POPUP,
@@ -83,14 +111,12 @@ std::string ShowToast(const std::wstring& htmlCode, int durationMs = 2000) {
 
     SetLayeredWindowAttributes(hwnd, 0, 0, LWA_COLORKEY);
 
-    // Позиция окна на экране
     RECT desktopRect;
     GetWindowRect(GetDesktopWindow(), &desktopRect);
     int x = desktopRect.right - 310; // 10px от правого края
     int y = 10;                      // 10px от верхнего края
     SetWindowPos(hwnd, HWND_TOPMOST, x, y, 300, 100, SWP_SHOWWINDOW);
 
-    // Инициализация WebView2
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
         nullptr, nullptr, nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
@@ -100,7 +126,6 @@ std::string ShowToast(const std::wstring& htmlCode, int durationMs = 2000) {
                     return result;
                 }
 
-                // Создаем контроллер WebView2
                 env->CreateCoreWebView2Controller(
                     hwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
@@ -113,7 +138,8 @@ std::string ShowToast(const std::wstring& htmlCode, int durationMs = 2000) {
                             webviewController = controller;
                             webviewController->get_CoreWebView2(&webview);
 
-
+                              // Добавляем обработчик запросов
+                            AddRequestLogging(webview);     
                             ComPtr<ICoreWebView2Controller2> webviewController2;
                             if (SUCCEEDED(webviewController.As(&webviewController2))) {
                                 // Устанавливаем прозрачный фон
@@ -125,7 +151,6 @@ std::string ShowToast(const std::wstring& htmlCode, int durationMs = 2000) {
                             GetClientRect(hwnd, &bounds);
                             webviewController->put_Bounds(bounds);
 
-                            // Устанавливаем HTML содержимое
                             webview->NavigateToString(htmlCode.c_str());
 
                             return S_OK;
@@ -139,18 +164,17 @@ std::string ShowToast(const std::wstring& htmlCode, int durationMs = 2000) {
         return "Failed to initialize WebView2";
     }
 
-    // Таймер для автоматического закрытия окна
     SetTimer(hwnd, 1, durationMs, nullptr);
 
-    // Цикл обработки сообщений
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
-    return "Success";
+    return responseToast;
 }
+
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
@@ -184,41 +208,15 @@ std::wstring ConvertToUTF16(const std::string& str) {
 void TestToastPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-  if (method_call.method_name().compare("getPlatformVersion") == 0) {
-    std::ostringstream version_stream;
-        std::string htmlCode =
-    "<!DOCTYPE html>"
-    "<html lang=\"ru\">"
-    "<head>"
-    "<meta charset=\"UTF-8\">"
-    "<style>"
-    "body { font-family: Arial, sans-serif; }"
-    "</style>"
-    "<title>Тост</title>"
-    "</head>"
-    "<body>"
-    "<p>Привет, мир! Это тест.</p>"
-    "</body>"
-    "</html>";
-    
+  if (method_call.method_name().compare("showToast") == 0) {
     const auto* arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
         
     if (arguments) {
       auto html_entry = arguments->find(flutter::EncodableValue("htmlCode"));
     std::string html = std::get<std::string>(html_entry->second);  
-    ShowToast(ConvertToUTF16(html), 5000);
-    }
 
-    
-    version_stream << "Windows ";
-    if (IsWindows10OrGreater()) {
-      version_stream << "10+";
-    } else if (IsWindows8OrGreater()) {
-      version_stream << "8";
-    } else if (IsWindows7OrGreater()) {
-      version_stream << "7";
+     result->Success(flutter::EncodableValue(ShowToast(ConvertToUTF16(html), 5000)));
     }
-    result->Success(flutter::EncodableValue(version_stream.str()));
   } else {
     result->NotImplemented();
   }
